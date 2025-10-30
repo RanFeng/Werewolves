@@ -206,3 +206,126 @@ class GameEngine:
                 return player
         return None
 
+    def perform_night_action(self, player_id: int, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        以“无UI、可编程输入”的方式执行夜晚操作，便于对接工具/Agent。
+
+        说明：本方法是对 `roles.py` 中角色执行逻辑的“无交互版”复刻，
+        通过结构化的 `params` 传入必要的选择项，直接更新游戏状态并返回行动日志。
+
+        入参约定（按角色区分）：
+        - 狼人 WEREWOLF：
+          - 若是“独狼”（场上仅此一名狼人），可查看中央 1-3 中的一张。
+          - params: {"view_center_index": 0|1|2|3}，0 表示不查看。
+        - 爪牙 MINION：
+          - 无需参数，返回看到的狼人信息（若无狼人则记录相应信息）。
+        - 预言家 SEER：
+          - 二选一：
+            1) 查看一名玩家：params: {"inspect_player_id": int}
+            2) 查看中央两张：params: {"inspect_centers": [i,j]}，i/j∈{1,2,3} 且不重复
+        - 强盗 ROBBER：
+          - 与一名玩家交换身份，或不交换。
+          - params: {"swap_with_player_id": int} 或 {"swap": false}
+        - 捣蛋鬼 TROUBLEMAKER：
+          - 交换两名其他玩家的身份。
+          - params: {"swap_player_id_1": int, "swap_player_id_2": int}
+        - 酒鬼 DRUNK：
+          - 必须与中央 1-3 的一张交换。
+          - params: {"center_index": 1|2|3}
+        - 失眠者 INSOMNIAC：
+          - 无参数，仅查看自己的最终身份。
+
+        返回：{"log": str, "updated_roles": Optional[Dict[int, Role]]}
+        """
+        from roles import Role
+
+        player = self.get_player_by_id(player_id)
+        if not player:
+            return {"log": "玩家不存在"}
+
+        role = player.current_role
+        updated_roles: Dict[int, Role] = {}
+
+        if role == Role.WEREWOLF:
+            werewolves = [p for p in self.players if p.current_role == Role.WEREWOLF]
+            if len(werewolves) == 1:
+                idx = int(params.get("view_center_index", 0))
+                if 1 <= idx <= 3:
+                    center_role = self.center_cards[idx - 1]
+                    return {"log": f"{player.name} 查看了中央第{idx}张牌: {center_role.value}"}
+                return {"log": f"{player.name} 选择不查看中央牌"}
+            else:
+                companions = ", ".join(w.name for w in werewolves if w.id != player.id)
+                return {"log": f"{player.name} 看到同伴: {companions}"}
+
+        if role == Role.MINION:
+            werewolves = [p.name for p in self.players if p.current_role == Role.WEREWOLF]
+            if werewolves:
+                return {"log": f"{player.name} 看到狼人是: {', '.join(werewolves)}"}
+            return {"log": f"{player.name} 发现场上没有狼人"}
+
+        if role == Role.SEER:
+            inspect_player_id = params.get("inspect_player_id")
+            inspect_centers = params.get("inspect_centers")
+            if inspect_player_id is not None:
+                target = self.get_player_by_id(int(inspect_player_id))
+                if not target:
+                    return {"log": f"{player.name} 试图查看的玩家不存在"}
+                return {"log": f"{player.name} 查看了 {target.name} 的身份: {target.current_role.value}"}
+            if isinstance(inspect_centers, list) and len(inspect_centers) == 2:
+                seen = []
+                used: set = set()
+                for raw in inspect_centers:
+                    try:
+                        idx = int(raw)
+                    except Exception:
+                        continue
+                    if idx in {1, 2, 3} and idx not in used:
+                        used.add(idx)
+                        seen.append(f"中央第{idx}张牌: {self.center_cards[idx - 1].value}")
+                if seen:
+                    return {"log": " | ".join(seen)}
+            return {"log": f"{player.name} 未执行行动"}
+
+        if role == Role.ROBBER:
+            if params.get("swap") is False and not params.get("swap_with_player_id"):
+                return {"log": f"{player.name} 选择不交换身份"}
+            target_id = params.get("swap_with_player_id")
+            if target_id is None:
+                return {"log": f"{player.name} 选择不交换身份"}
+            target = self.get_player_by_id(int(target_id))
+            if not target or target.id == player.id:
+                return {"log": f"{player.name} 交换目标无效"}
+            player.current_role, target.current_role = target.current_role, player.current_role
+            updated_roles[player.id] = player.current_role
+            updated_roles[target.id] = target.current_role
+            return {"log": f"{player.name} 与 {target.name} 交换了身份", "updated_roles": updated_roles}
+
+        if role == Role.TROUBLEMAKER:
+            a = params.get("swap_player_id_1")
+            b = params.get("swap_player_id_2")
+            if a is None or b is None or a == b:
+                return {"log": f"{player.name} 未执行行动"}
+            p1 = self.get_player_by_id(int(a))
+            p2 = self.get_player_by_id(int(b))
+            if not p1 or not p2 or p1.id == player.id or p2.id == player.id:
+                return {"log": f"{player.name} 未执行行动"}
+            p1.current_role, p2.current_role = p2.current_role, p1.current_role
+            updated_roles[p1.id] = p1.current_role
+            updated_roles[p2.id] = p2.current_role
+            return {"log": f"{player.name} 交换了 {p1.name} 和 {p2.name} 的身份", "updated_roles": updated_roles}
+
+        if role == Role.DRUNK:
+            idx = int(params.get("center_index", 0))
+            if idx in (1, 2, 3):
+                i = idx - 1
+                player.current_role, self.center_cards[i] = self.center_cards[i], player.current_role
+                updated_roles[player.id] = player.current_role
+                return {"log": f"{player.name} 与中央第{idx}张牌交换了身份", "updated_roles": updated_roles}
+            return {"log": f"{player.name} 交换身份失败"}
+
+        if role == Role.INSOMNIAC:
+            return {"log": f"{player.name} 查看了自己的最终身份: {player.current_role.value}"}
+
+        return {"log": f"{player.name} 的角色无需/不支持夜晚行动"}
+
