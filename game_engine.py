@@ -16,14 +16,33 @@ class Player:
         self.current_role: Optional[Role] = None
         self.vote_target: Optional[int] = None  # 投票目标的player_id
         self.is_alive = True
+        self.engine: Optional["GameEngine"] = None  # 回指引擎，用于对外操作
     
     def vote(self, target_id: int):
-        """投票"""
-        self.vote_target = target_id
+        """投票（对外接口）"""
+        if self.engine:
+            self.engine.cast_vote(self.id, target_id)
+        else:
+            self.vote_target = target_id
     
     def reveal_role(self):
         """亮开身份牌"""
         return self.current_role.value if self.current_role else "未知"
+
+    def view_initial_role(self) -> str:
+        """查看自己的初始角色（对外接口）"""
+        return self.initial_role.value if self.initial_role else "未知"
+
+    def speak(self, content: str):
+        """发表发言（对外接口）"""
+        if self.engine:
+            self.engine.player_speak(self.id, content)
+
+    def get_history_speeches(self) -> List[Dict[str, Any]]:
+        """获取历史发言（全局）（对外接口）"""
+        if self.engine:
+            return self.engine.get_speeches()
+        return []
     
     def __repr__(self):
         return f"Player({self.id}, {self.name}, {self.current_role.value if self.current_role else 'None'})"
@@ -69,6 +88,9 @@ class GameEngine:
         # 创建玩家
         for idx, name in enumerate(player_names, 1):
             self.players.append(Player(idx, name))
+
+        # 发言历史
+        self.speech_history: List[Dict[str, Any]] = []  # {idx, player_id, name, content}
     
     def setup(self):
         """游戏准备阶段"""
@@ -82,6 +104,7 @@ class GameEngine:
         for i, player in enumerate(self.players):
             player.initial_role = roles_pool[i]
             player.current_role = roles_pool[i]
+            player.engine = self
         
         # 剩余3张作为中央牌
         self.center_cards = roles_pool[len(self.players):]
@@ -136,6 +159,41 @@ class GameEngine:
         self.phase = "voting"
         if self.ui:
             self.ui.collect_votes(self)
+
+    # =========================
+    # 对外暴露的玩家操作接口
+    # =========================
+
+    def view_initial_role(self, player_id: int) -> str:
+        player = self.get_player_by_id(player_id)
+        return player.view_initial_role() if player else "未知"
+
+    def get_speeches(self) -> List[Dict[str, Any]]:
+        return list(self.speech_history)
+
+    def get_player_speeches(self, player_id: int) -> List[Dict[str, Any]]:
+        return [s for s in self.speech_history if s.get("player_id") == player_id]
+
+    def player_speak(self, player_id: int, content: str):
+        player = self.get_player_by_id(player_id)
+        if not player:
+            return
+        idx = len(self.speech_history) + 1
+        entry = {"idx": idx, "player_id": player.id, "name": player.name, "content": content}
+        self.speech_history.append(entry)
+        if self.ui:
+            self.ui.show_info(f"发言记录[{idx}] {player.name}: {content}")
+
+    def cast_vote(self, voter_id: int, target_id: int) -> bool:
+        """带校验的投票接口，供外部或UI调用"""
+        voter = self.get_player_by_id(voter_id)
+        target = self.get_player_by_id(target_id)
+        if not voter or not target:
+            return False
+        if voter.id == target.id:
+            return False
+        voter.vote_target = target.id
+        return True
     
     def get_all_players_by_role(self, role: Role) -> List[Player]:
         """获取所有拥有指定角色的玩家"""
