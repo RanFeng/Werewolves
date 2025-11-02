@@ -14,8 +14,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="一夜狼人杀（LLM 自动版）")
     parser.add_argument("--names", type=str, default="P1,P2,P3,P4,P5,P6", help="6名玩家名，逗号分隔")
     parser.add_argument("--seed", type=int, default=None, help="随机种子")
-    parser.add_argument("--api-key", type=str, default=None, help="OpenAI API Key（或从环境变量OPENAI_API_KEY读取）")
-    parser.add_argument("--model", type=str, default="gpt-4o-mini", help="模型名称（默认：gpt-4o-mini）")
     parser.add_argument("--speech-rounds", type=int, default=2, help="发言轮数（默认：2）")
     parser.add_argument("--reveal-log", action="store_true", help="结算后展示夜间日志")
     return parser.parse_args()
@@ -27,19 +25,12 @@ def main():
     if len(names) != 6:
         raise SystemExit("当前版本要求恰好6名玩家")
     
-    # 获取 API Key
-    api_key = args.api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise SystemExit("请提供 OpenAI API Key（--api-key 参数或设置环境变量 OPENAI_API_KEY）")
-    
     # 创建游戏引擎
     engine = GameEngine(player_names=names, seed=args.seed)
     
     # 创建 LLM Agent 管理器
     agent_manager = LLMAgentManager(
         engine=engine,
-        api_key=api_key,
-        model_name=args.model
     )
     
     print("=" * 60)

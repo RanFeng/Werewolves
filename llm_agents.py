@@ -3,7 +3,7 @@ LLM Agent 系统：将玩家与 LangChain OpenAI 绑定
 """
 from typing import List, Optional, Dict, Any
 import json
-
+import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_openai_tools_agent, AgentExecutor
@@ -19,17 +19,19 @@ from lc_tools import (
     night_robber_swap_tool, night_robber_skip_tool,
     night_troublemaker_swap_tool, night_drunk_swap_tool, night_insomniac_check_tool
 )
+from dotenv import load_dotenv
 
+load_dotenv()
 
 class AgentPlayer:
     """绑定 Player 与 LLM 的 Agent"""
-    
+
     def __init__(self, player: Player, llm: ChatOpenAI, engine: GameEngine):
         self.player = player
         self.llm = llm
         self.engine = engine
         self.agent_executor: Optional[AgentExecutor] = None
-    
+
     def get_role_night_tools(self, role: Role) -> List:
         """根据角色获取对应的夜晚工具"""
         tools_map = {
@@ -42,11 +44,11 @@ class AgentPlayer:
             Role.INSOMNIAC: [night_insomniac_check_tool],
         }
         return tools_map.get(role, [])
-    
+
     def execute_night_action(self, role: Role) -> Dict[str, Any]:
         """
         执行夜晚行动：为 Agent 绑定角色对应的工具，让其自主决策
-        
+
         Returns:
             {"log": str, "success": bool, "error": Optional[str]}
         """
@@ -56,7 +58,9 @@ class AgentPlayer:
                 "log": f"{self.player.name} ({role.value}) 无需夜晚行动",
                 "success": True
             }
-        
+
+        from roles import Role
+
         # 构建系统提示
         werewolves = [p.name for p in self.engine.players if p.current_role == Role.WEREWOLF]
         if len(werewolves) > 1 and self.player.current_role == Role.WEREWOLF:
@@ -122,7 +126,7 @@ class AgentPlayer:
 """
         else:
             system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。请执行你的夜晚行动。"""
-        
+
         try:
             # 创建 Agent
             prompt = ChatPromptTemplate.from_messages([
@@ -130,35 +134,35 @@ class AgentPlayer:
                 ("human", "请执行你的夜晚行动。"),
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ])
-            
+
             agent = create_openai_tools_agent(self.llm, tools, prompt)
             executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
-            
+
             # 执行
             result = executor.invoke({"input": "执行夜晚行动"})
-            
+
             # 解析结果
             output = result.get("output", "")
             log_parts = []
-            
+
             # 从工具调用结果中提取日志和更新状态
             if "intermediate_steps" in result:
                 for step in result["intermediate_steps"]:
                     tool_action = step[0]
                     tool_result = step[1]
-                    
+
                     try:
                         # 解析工具返回的 JSON 字符串
                         if isinstance(tool_result, str):
                             tool_result_dict = json.loads(tool_result)
                         else:
                             tool_result_dict = tool_result
-                        
+
                         if isinstance(tool_result_dict, dict):
                             # 提取日志
                             if "log" in tool_result_dict:
                                 log_parts.append(tool_result_dict["log"])
-                            
+
                             # 更新角色状态（如果工具返回了 updated_roles）
                             if "updated_roles" in tool_result_dict:
                                 updated_roles = tool_result_dict["updated_roles"]
@@ -303,8 +307,9 @@ class LLMAgentManager:
         
         # 创建 LLM 实例
         self.llm = ChatOpenAI(
-            api_key=api_key,
-            model=model_name,
+            base_url=os.getenv("BASE_URL"),
+            api_key=os.getenv("API_KEY"),
+            model=os.getenv("MODEL_NAME"),
             temperature=0.7
         )
         
