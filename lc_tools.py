@@ -30,6 +30,18 @@ from game_engine import GameEngine
 _ENGINE: Optional[GameEngine] = None
 
 
+def _serialize_night_action_result(result: Dict[str, Any]) -> str:
+    """序列化夜晚行动结果，将 Role 枚举转换为字符串"""
+    if "updated_roles" in result:
+        updated_roles = result["updated_roles"]
+        if isinstance(updated_roles, dict):
+            result["updated_roles"] = {
+                str(pid): (r.value if hasattr(r, 'value') else str(r))
+                for pid, r in updated_roles.items()
+            }
+    return json.dumps(result, ensure_ascii=False)
+
+
 def set_engine(engine: GameEngine) -> None:
     """
     注入当前对局的 `GameEngine` 实例。
@@ -166,7 +178,7 @@ def night_action_tool(player_id: int, params: Dict[str, Any]) -> str:
 
     try:
         result = _ENGINE.perform_night_action(player_id, params)
-        return json.dumps(result, ensure_ascii=False)
+        return _serialize_night_action_result(result)
     except Exception as exc:
         return f"执行失败: {exc}"
 
@@ -323,7 +335,7 @@ def night_robber_swap_tool(player_id: int, swap_with_player_id: int) -> str:
 
     try:
         result = _ENGINE.perform_night_action(player_id, {"swap_with_player_id": swap_with_player_id})
-        return json.dumps(result, ensure_ascii=False)
+        return _serialize_night_action_result(result)
     except Exception as exc:
         return f"执行失败: {exc}"
 
@@ -378,7 +390,7 @@ def night_troublemaker_swap_tool(player_id: int, swap_player_id_1: int, swap_pla
     try:
         params = {"swap_player_id_1": swap_player_id_1, "swap_player_id_2": swap_player_id_2}
         result = _ENGINE.perform_night_action(player_id, params)
-        return json.dumps(result, ensure_ascii=False)
+        return _serialize_night_action_result(result)
     except Exception as exc:
         return f"执行失败: {exc}"
 
@@ -407,7 +419,7 @@ def night_drunk_swap_tool(player_id: int, center_index: int) -> str:
 
     try:
         result = _ENGINE.perform_night_action(player_id, {"center_index": center_index})
-        return json.dumps(result, ensure_ascii=False)
+        return _serialize_night_action_result(result)
     except Exception as exc:
         return f"执行失败: {exc}"
 

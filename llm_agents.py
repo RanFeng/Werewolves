@@ -1,0 +1,380 @@
+"""
+LLM Agent 系统：将玩家与 LangChain OpenAI 绑定
+"""
+from typing import List, Optional, Dict, Any
+import json
+
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from game_engine import GameEngine, Player
+from roles import Role
+from role_prompts import get_role_prompt
+from lc_tools import (
+    set_engine, all_tools,
+    night_werewolf_tool, night_minion_tool,
+    night_seer_inspect_player_tool, night_seer_inspect_centers_tool,
+    night_robber_swap_tool, night_robber_skip_tool,
+    night_troublemaker_swap_tool, night_drunk_swap_tool, night_insomniac_check_tool
+)
+
+
+class AgentPlayer:
+    """绑定 Player 与 LLM 的 Agent"""
+    
+    def __init__(self, player: Player, llm: ChatOpenAI, engine: GameEngine):
+        self.player = player
+        self.llm = llm
+        self.engine = engine
+        self.agent_executor: Optional[AgentExecutor] = None
+    
+    def get_role_night_tools(self, role: Role) -> List:
+        """根据角色获取对应的夜晚工具"""
+        tools_map = {
+            Role.WEREWOLF: [night_werewolf_tool],
+            Role.MINION: [night_minion_tool],
+            Role.SEER: [night_seer_inspect_player_tool, night_seer_inspect_centers_tool],
+            Role.ROBBER: [night_robber_swap_tool, night_robber_skip_tool],
+            Role.TROUBLEMAKER: [night_troublemaker_swap_tool],
+            Role.DRUNK: [night_drunk_swap_tool],
+            Role.INSOMNIAC: [night_insomniac_check_tool],
+        }
+        return tools_map.get(role, [])
+    
+    def execute_night_action(self, role: Role) -> Dict[str, Any]:
+        """
+        执行夜晚行动：为 Agent 绑定角色对应的工具，让其自主决策
+        
+        Returns:
+            {"log": str, "success": bool, "error": Optional[str]}
+        """
+        tools = self.get_role_night_tools(role)
+        if not tools:
+            return {
+                "log": f"{self.player.name} ({role.value}) 无需夜晚行动",
+                "success": True
+            }
+        
+        # 构建系统提示
+        werewolves = [p.name for p in self.engine.players if p.current_role == Role.WEREWOLF]
+        if len(werewolves) > 1 and self.player.current_role == Role.WEREWOLF:
+            companions = [w for w in werewolves if w != self.player.name]
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+游戏状态：
+- 你是狼人，你的同伴是：{', '.join(companions)}
+- 你需要使用夜晚技能工具执行行动
+"""
+        elif role == Role.MINION:
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+游戏状态：
+- 你是爪牙，你可以看到场上所有狼人
+- 使用 night_minion 工具查看狼人信息
+"""
+        elif role == Role.SEER:
+            other_players = [f"{p.id}.{p.name}" for p in self.engine.players if p.id != self.player.id]
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+你可以选择：
+1. 使用 night_seer_inspect_player 查看一名玩家（玩家ID：{', '.join(other_players)}）
+2. 使用 night_seer_inspect_centers 查看中央两张牌（索引1-3中选择两个不同的数字）
+
+请选择一种方式执行你的技能。
+"""
+        elif role == Role.ROBBER:
+            other_players = [f"{p.id}.{p.name}" for p in self.engine.players if p.id != self.player.id]
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+你可以选择：
+1. 使用 night_robber_swap 与一名玩家交换身份（玩家ID：{', '.join(other_players)}）
+2. 使用 night_robber_skip 选择不交换
+
+请做出选择。
+"""
+        elif role == Role.TROUBLEMAKER:
+            other_players = [f"{p.id}.{p.name}" for p in self.engine.players if p.id != self.player.id]
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+你需要交换两名其他玩家的身份（不能是自己）。
+可选玩家ID：{', '.join(other_players)}
+
+使用 night_troublemaker_swap 工具，指定两个不同的玩家ID。
+"""
+        elif role == Role.DRUNK:
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+你必须与中央的一张牌交换身份。
+使用 night_drunk_swap 工具，指定 center_index（1-3）。
+"""
+        elif role == Role.INSOMNIAC:
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+使用 night_insomniac_check 工具查看你的最终身份。
+"""
+        elif role == Role.WEREWOLF and len([p for p in self.engine.players if p.current_role == Role.WEREWOLF]) == 1:
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。
+
+你是独狼！你可以选择查看中央的一张牌（1-3），或不查看（view_center_index=0）。
+使用 night_werewolf 工具执行。
+"""
+        else:
+            system_msg = f"""你是 {self.player.name}，当前角色是 {role.value}。请执行你的夜晚行动。"""
+        
+        try:
+            # 创建 Agent
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_msg),
+                ("human", "请执行你的夜晚行动。"),
+                MessagesPlaceholder(variable_name="agent_scratchpad"),
+            ])
+            
+            agent = create_openai_tools_agent(self.llm, tools, prompt)
+            executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+            
+            # 执行
+            result = executor.invoke({"input": "执行夜晚行动"})
+            
+            # 解析结果
+            output = result.get("output", "")
+            log_parts = []
+            
+            # 从工具调用结果中提取日志和更新状态
+            if "intermediate_steps" in result:
+                for step in result["intermediate_steps"]:
+                    tool_action = step[0]
+                    tool_result = step[1]
+                    
+                    try:
+                        # 解析工具返回的 JSON 字符串
+                        if isinstance(tool_result, str):
+                            tool_result_dict = json.loads(tool_result)
+                        else:
+                            tool_result_dict = tool_result
+                        
+                        if isinstance(tool_result_dict, dict):
+                            # 提取日志
+                            if "log" in tool_result_dict:
+                                log_parts.append(tool_result_dict["log"])
+                            
+                            # 更新角色状态（如果工具返回了 updated_roles）
+                            if "updated_roles" in tool_result_dict:
+                                updated_roles = tool_result_dict["updated_roles"]
+                                if isinstance(updated_roles, dict):
+                                    # updated_roles 格式：{player_id: role_name 或 Role}
+                                    for pid, new_role in updated_roles.items():
+                                        player = self.engine.get_player_by_id(int(pid))
+                                        if player:
+                                            # 如果返回的是字符串，需要转换为 Role
+                                            if isinstance(new_role, str):
+                                                from roles import Role
+                                                # 尝试找到对应的 Role
+                                                for r in Role:
+                                                    if r.value == new_role:
+                                                        player.current_role = r
+                                                        break
+                                            else:
+                                                player.current_role = new_role
+                    except json.JSONDecodeError:
+                        # 如果不是 JSON，直接使用字符串
+                        log_parts.append(str(tool_result))
+                    except Exception as e:
+                        log_parts.append(f"[工具调用解析错误: {str(e)}]")
+            
+            if not log_parts:
+                log_parts.append(f"{self.player.name} ({role.value}) 执行夜晚行动")
+            
+            return {
+                "log": " | ".join(log_parts),
+                "success": True,
+                "output": output
+            }
+        except Exception as e:
+            return {
+                "log": f"{self.player.name} 夜晚行动失败: {str(e)}",
+                "success": False,
+                "error": str(e)
+            }
+    
+    def generate_speech(self, round_num: int = 1) -> str:
+        """
+        生成白天发言：根据角色绑定 Prompt，让 LLM 生成发言
+        
+        Args:
+            round_num: 发言轮次
+        
+        Returns:
+            发言内容字符串
+        """
+        # 构建游戏上下文
+        other_players = [
+            {"id": p.id, "name": p.name}
+            for p in self.engine.players if p.id != self.player.id
+        ]
+        
+        game_context = {
+            "player_name": self.player.name,
+            "initial_role": self.player.initial_role.value if self.player.initial_role else "未知",
+            "current_role": self.player.current_role.value if self.player.current_role else "未知",
+            "other_players": other_players,
+            "speech_history": self.engine.get_speeches(),
+            "center_cards_info": [r.value for r in self.engine.center_cards],
+        }
+        
+        # 获取角色 Prompt
+        system_prompt = get_role_prompt(self.player.current_role, game_context)
+        
+        # 构建用户消息
+        user_prompt = f"""现在是第 {round_num} 轮发言。
+
+请生成你的发言内容。要求：
+1. 50-150字
+2. 逻辑清晰
+3. 基于你的角色和已知信息
+4. 用中文表达
+5. 直接输出发言内容，不要包含"发言："等前缀
+
+请开始发言："""
+        
+        try:
+            messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ]
+            
+            response = self.llm.invoke(messages)
+            speech = response.content.strip()
+            
+            # 清理可能的格式标记
+            if speech.startswith("发言："):
+                speech = speech[3:].strip()
+            if speech.startswith("发言"):
+                speech = speech[2:].strip()
+            
+            return speech
+        except Exception as e:
+            return f"[发言生成失败: {str(e)}]"
+    
+    def cast_vote_by_llm(self) -> Optional[int]:
+        """
+        让 LLM 决定投票目标
+        
+        Returns:
+            目标玩家ID，失败返回None
+        """
+        other_players = [
+            f"{p.id}.{p.name}"
+            for p in self.engine.players if p.id != self.player.id
+        ]
+        
+        system_prompt = f"""你是 {self.player.name}，当前角色是 {self.player.current_role.value if self.player.current_role else "未知"}。
+
+可选投票目标：{', '.join(other_players)}
+
+请根据游戏情况，选择一个玩家ID进行投票。直接输出数字（1-6），不要其他内容。"""
+        
+        try:
+            response = self.llm.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content="请选择你要投票的玩家ID（只输出数字）：")
+            ])
+            
+            vote_str = response.content.strip()
+            vote_id = int(vote_str)
+            
+            # 验证
+            if 1 <= vote_id <= len(self.engine.players) and vote_id != self.player.id:
+                return vote_id
+            
+            return None
+        except Exception as e:
+            print(f"[{self.player.name} 投票失败: {str(e)}]")
+            return None
+
+
+class LLMAgentManager:
+    """管理所有 AI 玩家"""
+    
+    def __init__(self, engine: GameEngine, api_key: Optional[str] = None, model_name: str = "gpt-4o-mini"):
+        self.engine = engine
+        set_engine(engine)  # 注入引擎到工具模块
+        
+        # 创建 LLM 实例
+        self.llm = ChatOpenAI(
+            api_key=api_key,
+            model=model_name,
+            temperature=0.7
+        )
+        
+        # 为所有玩家创建 Agent
+        self.agents: Dict[int, AgentPlayer] = {}
+        for player in engine.players:
+            self.agents[player.id] = AgentPlayer(player, self.llm, engine)
+    
+    def execute_night_phase(self):
+        """执行夜晚阶段：按顺序为每个角色执行夜晚行动"""
+        night_log = []
+        
+        for role in self.engine.NIGHT_ORDER:
+            players_with_role = [
+                p for p in self.engine.players 
+                if p.current_role == role
+            ]
+            
+            for player in players_with_role:
+                agent = self.agents.get(player.id)
+                if agent:
+                    print(f"\n=== {role.value} 行动：{player.name} ===")
+                    result = agent.execute_night_action(role)
+                    if result.get("success"):
+                        night_log.append(result.get("log", ""))
+                        print(f"✓ {result.get('log', '')}")
+                    else:
+                        print(f"✗ {result.get('error', '未知错误')}")
+        
+        # 更新引擎的夜晚日志
+        self.engine.night_log.extend(night_log)
+    
+    def discussion_phase(self, rounds: int = 2):
+        """
+        讨论阶段：让所有玩家发言
+        
+        Args:
+            rounds: 发言轮数
+        """
+        for round_num in range(1, rounds + 1):
+            print(f"\n=== 第 {round_num} 轮发言 ===\n")
+            
+            # 随机顺序发言
+            import random
+            player_order = self.engine.players.copy()
+            random.shuffle(player_order)
+            
+            for player in player_order:
+                agent = self.agents.get(player.id)
+                if agent:
+                    print(f"\n[{player.name}]")
+                    speech = agent.generate_speech(round_num)
+                    print(speech)
+                    # 记录发言
+                    self.engine.player_speak(player.id, speech)
+                    print()
+    
+    def voting_phase(self):
+        """投票阶段：让所有玩家投票"""
+        print("\n=== 投票阶段 ===\n")
+        
+        for player in self.engine.players:
+            agent = self.agents.get(player.id)
+            if agent:
+                print(f"\n[{player.name} 投票中...]")
+                vote_target = agent.cast_vote_by_llm()
+                if vote_target:
+                    self.engine.cast_vote(player.id, vote_target)
+                    target_player = self.engine.get_player_by_id(vote_target)
+                    print(f"✓ {player.name} 投票给 {target_player.name if target_player else vote_target}")
+                else:
+                    print(f"✗ {player.name} 投票失败")
+
