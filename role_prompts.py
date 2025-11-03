@@ -12,6 +12,7 @@ def get_role_prompt(role: Role, game_context: Dict[str, Any]) -> str:
     Args:
         role: 玩家当前角色
         game_context: 游戏上下文信息，包含：
+            - night_log: 夜晚日志
             - player_name: 玩家名称
             - initial_role: 初始角色
             - current_role: 当前角色（可能已被交换）
@@ -25,7 +26,7 @@ def get_role_prompt(role: Role, game_context: Dict[str, Any]) -> str:
     game_rule = ""
     with open("一夜狼人杀规则.txt", "r", encoding="utf-8") as f:
         game_rule = f.read()
-
+    night_log = game_context.get("night_log", "")
     player_name = game_context.get("player_name", "")
     initial_role = game_context.get("initial_role", "")
     current_role = game_context.get("current_role", "")
@@ -36,7 +37,7 @@ def get_role_prompt(role: Role, game_context: Dict[str, Any]) -> str:
 
 游戏状态：
 - 你的初始身份：{initial_role.value}
-- 你现在的身份：未知。你不知道自己现在的身份，但你可以根据游戏规则和历史发言来推理。
+- 你的夜晚操作日志：{night_log}
 - 注意：游戏中可能有角色交换，你的最终身份可能和初始身份不同！
 """
     

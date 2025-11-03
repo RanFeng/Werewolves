@@ -170,25 +170,14 @@ class AgentPlayer:
                                     # updated_roles 格式：{player_id: role_name 或 Role}
                                     for pid, new_role in updated_roles.items():
                                         player = self.engine.get_player_by_id(int(pid))
-                                        if player:
-                                            # 如果返回的是字符串，需要转换为 Role
-                                            if isinstance(new_role, str):
-                                                from roles import Role
-                                                # 尝试找到对应的 Role
-                                                for r in Role:
-                                                    if r.value == new_role:
-                                                        player.current_role = r
-                                                        break
-                                            else:
-                                                player.current_role = new_role
+                                        player.current_role = new_role
                     except json.JSONDecodeError:
                         # 如果不是 JSON，直接使用字符串
                         log_parts.append(str(tool_result))
                     except Exception as e:
                         log_parts.append(f"[工具调用解析错误: {str(e)}]")
             
-            if not log_parts:
-                log_parts.append(f"{self.player.name} ({role.value}) 执行夜晚行动")
+            log_parts.append(f"{self.player.name} ({role.value}) 执行夜晚行动 {output}")
             
             return {
                 "log": " | ".join(log_parts),
@@ -219,6 +208,7 @@ class AgentPlayer:
         ]
         
         game_context = {
+            "night_log": self.player.night_log,
             "player_name": self.player.name,
             "initial_role": self.player.initial_role if self.player.initial_role else "未知",
             "current_role": self.player.current_role if self.player.current_role else "未知",
@@ -359,13 +349,12 @@ class LLMAgentManager:
             
             for player in player_order:
                 agent = self.agents.get(player.id)
-                if agent:
-                    print(f"\n[{player.name}]")
-                    speech = agent.generate_speech(round_num)
-                    print(speech)
-                    # 记录发言
-                    self.engine.player_speak(player.id, speech)
-                    print()
+                print(f"\n[{player.name}]")
+                speech = agent.generate_speech(round_num)
+                print(speech)
+                # 记录发言
+                self.engine.player_speak(player.id, speech)
+                print()
     
     def voting_phase(self):
         """投票阶段：让所有玩家投票"""
