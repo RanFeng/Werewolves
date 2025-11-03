@@ -220,8 +220,8 @@ class AgentPlayer:
         
         game_context = {
             "player_name": self.player.name,
-            "initial_role": self.player.initial_role.value if self.player.initial_role else "未知",
-            "current_role": self.player.current_role.value if self.player.current_role else "未知",
+            "initial_role": self.player.initial_role if self.player.initial_role else "未知",
+            "current_role": self.player.current_role if self.player.current_role else "未知",
             "other_players": other_players,
             "speech_history": self.engine.get_speeches(),
             "center_cards_info": [r.value for r in self.engine.center_cards],
@@ -330,14 +330,14 @@ class LLMAgentManager:
             
             for player in players_with_role:
                 agent = self.agents.get(player.id)
-                if agent:
-                    print(f"\n=== {role.value} 行动：{player.name} ===")
-                    result = agent.execute_night_action(role)
-                    if result.get("success"):
-                        night_log.append(result.get("log", ""))
-                        print(f"✓ {result.get('log', '')}")
-                    else:
-                        print(f"✗ {result.get('error', '未知错误')}")
+                print(f"\n=== {role.value} 行动：{player.name} ===")
+                result = agent.execute_night_action(role)
+                if result.get("success"):
+                    player.night_log = result.get("log", "")
+                    night_log.append(result.get("log", ""))
+                    print(f"✓ {player.night_log}")
+                else:
+                    print(f"✗ {result.get('error', '未知错误')}")
         
         # 更新引擎的夜晚日志
         self.engine.night_log.extend(night_log)

@@ -12,6 +12,7 @@ class Player:
     def __init__(self, player_id: int, name: str):
         self.id = player_id
         self.name = name
+        self.night_log = ""
         self.initial_role: Optional[Role] = None
         self.current_role: Optional[Role] = None
         self.vote_target: Optional[int] = None  # 投票目标的player_id

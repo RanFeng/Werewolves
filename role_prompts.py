@@ -22,16 +22,21 @@ def get_role_prompt(role: Role, game_context: Dict[str, Any]) -> str:
     Returns:
         系统 Prompt 字符串
     """
+    game_rule = ""
+    with open("一夜狼人杀规则.txt", "r", encoding="utf-8") as f:
+        game_rule = f.read()
+
     player_name = game_context.get("player_name", "")
     initial_role = game_context.get("initial_role", "")
     current_role = game_context.get("current_role", "")
     
     base_context = f"""
+游戏规则：{game_rule}
 你是一夜狼人杀游戏中的玩家 {player_name}。
 
 游戏状态：
-- 你的初始身份：{initial_role}
-- 你现在的身份：{current_role}
+- 你的初始身份：{initial_role.value}
+- 你现在的身份：未知。你不知道自己现在的身份，但你可以根据游戏规则和历史发言来推理。
 - 注意：游戏中可能有角色交换，你的最终身份可能和初始身份不同！
 """
     
@@ -141,18 +146,8 @@ def get_role_prompt(role: Role, game_context: Dict[str, Any]) -> str:
 """,
     }
     
-    role_strategy = role_prompts.get(role, """
-角色背景：你是好人阵营的一员。
-
-策略要点：
-1. 根据你的初始身份和可能被交换后的身份进行推理。
-2. 要分析场上情况，找出真正的狼人。
-3. 注意身份可能被交换，要根据当前身份行动。
-4. 如果发现自己变成了狼人，要决定是反水还是继续伪装。
-
-发言风格：逻辑清晰，帮助好人阵营。
-""")
-    
+    role_strategy = role_prompts.get(initial_role, """""")
+#     print("role_strategy", initial_role,initial_role.value, role_strategy)
     # 构建完整的 Prompt
     prompt = base_context + role_strategy
     
@@ -160,7 +155,7 @@ def get_role_prompt(role: Role, game_context: Dict[str, Any]) -> str:
     speech_history = game_context.get("speech_history", [])
     if speech_history:
         prompt += "\n\n历史发言：\n"
-        for speech in speech_history[-10:]:  # 只显示最近10条
+        for speech in speech_history:
             prompt += f"- {speech.get('name', '')}: {speech.get('content', '')}\n"
     
     # 添加其他玩家信息
