@@ -172,16 +172,16 @@ class AgentPlayer:
             "night_log": self.player.night_log,
             "player_name": self.player.name,
             "initial_role": self.player.initial_role if self.player.initial_role else "未知",
-            "current_role": self.player.current_role if self.player.current_role else "未知",
             "other_players": other_players,
+            "play_order": self.engine.player_order,
             "speech_history": self.engine.get_speeches(),
             "center_cards_info": [r.value for r in self.engine.center_cards],
         }
 
-        print("game_context", game_context)
+        # print("game_context", game_context)
 
         # 获取角色 Prompt
-        system_prompt = get_role_prompt(self.player.current_role, game_context)
+        system_prompt = get_role_prompt(game_context)
         return system_prompt
     
     def generate_speech(self, round_num: int = 1) -> str:
@@ -214,7 +214,10 @@ class AgentPlayer:
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ]
-            
+            # print("="*60)
+            # print(f"发言阶段 {self.player.name} 初试身份：{self.player.initial_role.value} 最终身份：{self.player.current_role.value}")
+            # print(f"提示词: {system_prompt} {user_prompt}")
+            # print("="*60)
             response = self.llm.invoke(messages)
             speech = response.content.strip()
             
@@ -243,13 +246,17 @@ class AgentPlayer:
 
         user_prompt = f"""可选投票目标：{', '.join(other_players)}，
 请根据游戏情况，选择一个玩家ID进行投票。直接输出数字（1-6），不要其他内容。"""
-        
+        # print("=" * 60)
+        # print(f"投票阶段")
+        # print(f"发言阶段 {self.player.name} 初试身份：{self.player.initial_role.value} 最终身份：{self.player.current_role.value}")
+        # print(f"提示词: {system_prompt} {user_prompt}")
+        # print("=" * 60)
         try:
             response = self.llm.invoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ])
-            
+
             vote_str = response.content.strip()
             vote_id = int(vote_str)
             
@@ -271,7 +278,7 @@ class LLMAgentManager:
         set_engine(engine)  # 注入引擎到工具模块
         
         # 创建 LLM 实例
-        self.llm = ChatOpenAI(
+        llm = ChatOpenAI(
             model=os.getenv("MODEL"),
             base_url=os.getenv("BASEURL"),
             api_key=os.getenv("APIKEY"),
@@ -281,7 +288,7 @@ class LLMAgentManager:
         # 为所有玩家创建 Agent
         self.agents: Dict[int, AgentPlayer] = {}
         for player in engine.players:
-            self.agents[player.id] = AgentPlayer(player, self.llm, engine)
+            self.agents[player.id] = AgentPlayer(player, llm, engine)
     
     def execute_night_phase(self):
         """执行夜晚阶段：按顺序为每个角色执行夜晚行动"""
@@ -290,17 +297,17 @@ class LLMAgentManager:
         for role in self.engine.NIGHT_ORDER:
             players_with_role = [
                 p for p in self.engine.players 
-                if p.current_role == role
+                if p.initial_role == role
             ]
             
             for player in players_with_role:
                 agent = self.agents.get(player.id)
                 print(f"\n=== {role.value} 行动：{player.name} ===")
                 result = agent.execute_night_action(role)
+                night_log.append(result.get("log", "未执行任何操作"))
                 if result.get("success"):
-                    player.night_log = result.get("log", "")
-                    night_log.append(result.get("log", ""))
-                    print(f"✓ {player.night_log}")
+                    player.night_log = result.get("output", "未执行任何操作")
+                    print(f"✓ 【操作成功】{player.night_log}")
                 else:
                     print(f"✗ {result.get('error', '未知错误')}")
         
@@ -314,15 +321,12 @@ class LLMAgentManager:
         Args:
             rounds: 发言轮数
         """
-        # 随机顺序发言
-        import random
-        player_order = self.engine.players.copy()
-        random.shuffle(player_order)
+
 
         for round_num in range(1, rounds + 1):
             print(f"\n=== 第 {round_num} 轮发言 ===\n")
 
-            for player in player_order:
+            for player in self.engine.player_order:
                 agent = self.agents.get(player.id)
                 print(f"\n[{player.name}]")
                 speech = agent.generate_speech(round_num)

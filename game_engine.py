@@ -4,7 +4,7 @@
 import random
 from typing import List, Optional, Dict, Any
 from roles import Role, Faction
-
+import random
 
 class Player:
     """玩家类"""
@@ -25,10 +25,6 @@ class Player:
             self.engine.cast_vote(self.id, target_id)
         else:
             self.vote_target = target_id
-    
-    def reveal_role(self):
-        """亮开身份牌"""
-        return self.current_role.value if self.current_role else "未知"
 
     def view_initial_role(self) -> str:
         """查看自己的初始角色（对外接口）"""
@@ -46,7 +42,7 @@ class Player:
         return []
     
     def __repr__(self):
-        return f"Player({self.id}, {self.name}, {self.current_role.value if self.current_role else 'None'})"
+        return f"Player({self.id}, {self.name}, {self.initial_role.value if self.initial_role else 'None'})"
 
 
 class GameEngine:
@@ -85,10 +81,18 @@ class GameEngine:
         self.night_log: List[str] = []
         self.phase = "setup"
         self.ui: Any = None  # GameUI 实例，稍后注入
-        
+
+        # 随机顺序发言
+
+
         # 创建玩家
         for idx, name in enumerate(player_names, 1):
             self.players.append(Player(idx, name))
+
+        self.player_order = self.players.copy()
+        random.shuffle(self.player_order)
+        # print("随机顺序", self.player_order)
+
 
         # 发言历史
         self.speech_history: List[Dict[str, Any]] = []  # {idx, player_id, name, content}
@@ -132,7 +136,7 @@ class GameEngine:
         # 按夜晚顺序执行行动
         for role_to_activate in self.NIGHT_ORDER:
             # 找到所有拥有这个角色的玩家
-            players_with_role = [p for p in self.players if p.current_role == role_to_activate]
+            players_with_role = [p for p in self.players if p.initial_role == role_to_activate]
             
             for player in players_with_role:
                 action = get_role_action(role_to_activate)
@@ -195,11 +199,7 @@ class GameEngine:
             return False
         voter.vote_target = target.id
         return True
-    
-    def get_all_players_by_role(self, role: Role) -> List[Player]:
-        """获取所有拥有指定角色的玩家"""
-        return [p for p in self.players if p.current_role == role]
-    
+
     def get_player_by_id(self, player_id: int) -> Optional[Player]:
         """根据ID获取玩家"""
         for player in self.players:
@@ -244,7 +244,7 @@ class GameEngine:
         if not player:
             return {"log": "玩家不存在"}
 
-        role = player.current_role
+        role = player.initial_role
         updated_roles: Dict[int, Role] = {}
 
         if role == Role.WEREWOLF:

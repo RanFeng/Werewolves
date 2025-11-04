@@ -79,6 +79,7 @@ def main():
     
     resolver = VoteResolver()
     death_ids = resolver.determine_deaths(engine.players)
+    print("death_ids", death_ids)
     win, detail = resolver.check_win_condition(engine.players, engine.center_cards, death_ids)
     
     print(f"\n胜负：{win}")

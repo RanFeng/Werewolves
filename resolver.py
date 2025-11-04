@@ -32,11 +32,10 @@ class VoteResolver:
         deaths: Set[int] = set(death_ids)
         id_to_player = {p.id: p for p in players}
         hunter_ids = [pid for pid in deaths if id_to_player.get(pid) and id_to_player[pid].current_role == Role.HUNTER]
-        if hunter_ids:
-            for hunter_id in hunter_ids:
-                for p in players:
-                    if p.vote_target == hunter_id:
-                        deaths.add(p.id)
+        for hunter_id in hunter_ids:
+            for p in players:
+                if p.vote_target == hunter_id:
+                    deaths.add(p.id)
         return deaths
 
     def check_win_condition(self, players, center_cards, death_ids: List[int]) -> Tuple[str, Dict]:
