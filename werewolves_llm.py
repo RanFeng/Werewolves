@@ -18,7 +18,7 @@ def parse_args():
     parser.add_argument("--reveal-log", action="store_true", help="结算后展示夜间日志")
     return parser.parse_args()
 
-
+# python werewolves_llm.py --names "P1,P2,P3,P4,P5,P6" --speech-rounds 2 --reveal-log
 def main():
     args = parse_args()
     names: List[str] = [n.strip() for n in args.names.split(",") if n.strip()]

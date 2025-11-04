@@ -72,10 +72,7 @@ def view_initial_role_tool(player_id: int) -> str:
     - 角色名字符串，如“狼人/预言家/强盗/……”；若失败返回“未知/错误信息”。
     """
 
-    try:
-        return _ENGINE.view_initial_role(player_id)
-    except Exception as exc:
-        return f"查看失败: {exc}"
+    return _ENGINE.view_initial_role(player_id)
 
 
 @tool("get_history_speeches")
@@ -88,11 +85,8 @@ def get_history_speeches_tool() -> str:
       {"idx": 发言序号, "player_id": 玩家ID, "name": 玩家名, "content": 发言内容}
     """
 
-    try:
-        speeches = _ENGINE.get_speeches()
-        return json.dumps(speeches, ensure_ascii=False)
-    except Exception as exc:
-        return f"获取失败: {exc}"
+    speeches = _ENGINE.get_speeches()
+    return json.dumps(speeches, ensure_ascii=False)
 
 
 class SpeakInput(BaseModel):

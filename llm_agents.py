@@ -6,7 +6,7 @@ import json
 import os
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import create_openai_tools_agent, AgentExecutor
+from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from game_engine import GameEngine, Player
@@ -30,7 +30,7 @@ class AgentPlayer:
         self.player = player
         self.llm = llm
         self.engine = engine
-        self.agent_executor: Optional[AgentExecutor] = None
+        self.agent_executor = None
 
     def get_role_night_tools(self, role: Role) -> List:
         """根据角色获取对应的夜晚工具"""
@@ -132,57 +132,27 @@ class AgentPlayer:
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_msg),
                 ("human", "请执行你的夜晚行动。"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
             ])
+            result = self.llm.bind_tools(tools).invoke(prompt.format())
 
-            agent = create_openai_tools_agent(self.llm, tools, prompt)
-            executor = AgentExecutor(agent=agent, tools=tools, verbose=False)
+            tool_call = result.tool_calls[0]
+            tool_name = tool_call['name']
+            tool_args = tool_call['args']
 
-            # 执行
-            result = executor.invoke({"input": "执行夜晚行动"})
-
-            # 解析结果
-            output = result.get("output", "")
-            log_parts = []
-
-            # 从工具调用结果中提取日志和更新状态
-            if "intermediate_steps" in result:
-                for step in result["intermediate_steps"]:
-                    tool_action = step[0]
-                    tool_result = step[1]
-
-                    try:
-                        # 解析工具返回的 JSON 字符串
-                        if isinstance(tool_result, str):
-                            tool_result_dict = json.loads(tool_result)
-                        else:
-                            tool_result_dict = tool_result
-
-                        if isinstance(tool_result_dict, dict):
-                            # 提取日志
-                            if "log" in tool_result_dict:
-                                log_parts.append(tool_result_dict["log"])
-
-                            # 更新角色状态（如果工具返回了 updated_roles）
-                            if "updated_roles" in tool_result_dict:
-                                updated_roles = tool_result_dict["updated_roles"]
-                                if isinstance(updated_roles, dict):
-                                    # updated_roles 格式：{player_id: role_name 或 Role}
-                                    for pid, new_role in updated_roles.items():
-                                        player = self.engine.get_player_by_id(int(pid))
-                                        player.current_role = new_role
-                    except json.JSONDecodeError:
-                        # 如果不是 JSON，直接使用字符串
-                        log_parts.append(str(tool_result))
-                    except Exception as e:
-                        log_parts.append(f"[工具调用解析错误: {str(e)}]")
-            
-            log_parts.append(f"{self.player.name} ({role.value}) 执行夜晚行动 {output}")
-            
+            # 找到对应的工具并执行
+            for tool in tools:
+                if tool.name == tool_name:
+                    output = tool.invoke(tool_args)
+                    output = json.loads(output)
+                    return {
+                        "log": f"{self.player.name} ({role.value}) 执行夜晚行动 {output["log"]}",
+                        "success": True,
+                        "output": output["log"]
+                    }
             return {
-                "log": " | ".join(log_parts),
+                "log": f"{self.player.name} ({role.value}) 未执行夜晚行动",
                 "success": True,
-                "output": output
+                "output": ""
             }
         except Exception as e:
             return {
@@ -190,6 +160,29 @@ class AgentPlayer:
                 "success": False,
                 "error": str(e)
             }
+
+    def get_system_prompt(self):
+        # 构建游戏上下文
+        other_players = [
+            {"id": p.id, "name": p.name}
+            for p in self.engine.players if p.id != self.player.id
+        ]
+
+        game_context = {
+            "night_log": self.player.night_log,
+            "player_name": self.player.name,
+            "initial_role": self.player.initial_role if self.player.initial_role else "未知",
+            "current_role": self.player.current_role if self.player.current_role else "未知",
+            "other_players": other_players,
+            "speech_history": self.engine.get_speeches(),
+            "center_cards_info": [r.value for r in self.engine.center_cards],
+        }
+
+        print("game_context", game_context)
+
+        # 获取角色 Prompt
+        system_prompt = get_role_prompt(self.player.current_role, game_context)
+        return system_prompt
     
     def generate_speech(self, round_num: int = 1) -> str:
         """
@@ -201,24 +194,8 @@ class AgentPlayer:
         Returns:
             发言内容字符串
         """
-        # 构建游戏上下文
-        other_players = [
-            {"id": p.id, "name": p.name}
-            for p in self.engine.players if p.id != self.player.id
-        ]
-        
-        game_context = {
-            "night_log": self.player.night_log,
-            "player_name": self.player.name,
-            "initial_role": self.player.initial_role if self.player.initial_role else "未知",
-            "current_role": self.player.current_role if self.player.current_role else "未知",
-            "other_players": other_players,
-            "speech_history": self.engine.get_speeches(),
-            "center_cards_info": [r.value for r in self.engine.center_cards],
-        }
-        
         # 获取角色 Prompt
-        system_prompt = get_role_prompt(self.player.current_role, game_context)
+        system_prompt = self.get_system_prompt()
         
         # 构建用户消息
         user_prompt = f"""现在是第 {round_num} 轮发言。
@@ -262,17 +239,15 @@ class AgentPlayer:
             f"{p.id}.{p.name}"
             for p in self.engine.players if p.id != self.player.id
         ]
-        
-        system_prompt = f"""你是 {self.player.name}，当前角色是 {self.player.current_role.value if self.player.current_role else "未知"}。
+        system_prompt = self.get_system_prompt()
 
-可选投票目标：{', '.join(other_players)}
-
+        user_prompt = f"""可选投票目标：{', '.join(other_players)}，
 请根据游戏情况，选择一个玩家ID进行投票。直接输出数字（1-6），不要其他内容。"""
         
         try:
             response = self.llm.invoke([
                 SystemMessage(content=system_prompt),
-                HumanMessage(content="请选择你要投票的玩家ID（只输出数字）：")
+                HumanMessage(content=user_prompt)
             ])
             
             vote_str = response.content.strip()
@@ -297,9 +272,9 @@ class LLMAgentManager:
         
         # 创建 LLM 实例
         self.llm = ChatOpenAI(
-            base_url=os.getenv("BASE_URL"),
-            api_key=os.getenv("API_KEY"),
-            model=os.getenv("MODEL_NAME"),
+            model=os.getenv("MODEL"),
+            base_url=os.getenv("BASEURL"),
+            api_key=os.getenv("APIKEY"),
             temperature=0.7
         )
         
@@ -339,14 +314,14 @@ class LLMAgentManager:
         Args:
             rounds: 发言轮数
         """
+        # 随机顺序发言
+        import random
+        player_order = self.engine.players.copy()
+        random.shuffle(player_order)
+
         for round_num in range(1, rounds + 1):
             print(f"\n=== 第 {round_num} 轮发言 ===\n")
-            
-            # 随机顺序发言
-            import random
-            player_order = self.engine.players.copy()
-            random.shuffle(player_order)
-            
+
             for player in player_order:
                 agent = self.agents.get(player.id)
                 print(f"\n[{player.name}]")

@@ -150,8 +150,9 @@ def get_role_prompt(role: Role, game_context: Dict[str, Any]) -> str:
     role_strategy = role_prompts.get(initial_role, """""")
 #     print("role_strategy", initial_role,initial_role.value, role_strategy)
     # 构建完整的 Prompt
-    prompt = base_context + role_strategy
-    
+    # prompt = base_context + role_strategy
+    prompt = base_context
+
     # 添加历史发言信息
     speech_history = game_context.get("speech_history", [])
     if speech_history:
